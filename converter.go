@@ -3,12 +3,13 @@ package tiddlywiki_converter
 import (
 	"fmt"
 	"log" 
+	"net/url"    
 	"tiddlywiki-converter/blogger"
 	"tiddlywiki-converter/hashnode"
 	"tiddlywiki-converter/livejournal"
 	"tiddlywiki-converter/tiddlywiki"
 	"tiddlywiki-converter/wordpress"
-	"tiddlywiki-converter/wikipedia" // <-- Раскомментировано
+	"tiddlywiki-converter/wikipedia"
 )
 
 func Convert(config map[string]string) ([]*tiddlywiki.Tiddler, error) {
@@ -18,10 +19,27 @@ func Convert(config map[string]string) ([]*tiddlywiki.Tiddler, error) {
 	}
 
 	switch platform {
-	case "hashnode":
-		username := config["username"]
-		host := config["host"]
-		return hashnode.ConvertFromAPI(username, host)
+        
+    case "hashnode":
+        username := config["username"]
+        host := config["host"]
+        pageURL := config["url"]
+
+    // Если указан URL, но не указан хост, извлекаем хост из URL
+        if pageURL != "" && host == "" {
+            parsedURL, err := url.Parse(pageURL)
+            if err != nil {
+                return nil, fmt.Errorf("некорректный URL для Hashnode: %w", err)
+            }
+            host = parsedURL.Host
+            log.Printf("Извлечен хост из URL: %s", host)
+        }
+
+        if username == "" && host == "" {
+            return nil, fmt.Errorf("для Hashnode необходимо указать --url, --host или --user")
+        }
+    
+        return hashnode.ConvertFromAPI(username, host)
 	
     case "wordpress":
 		url := config["url"]

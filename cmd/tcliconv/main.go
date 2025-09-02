@@ -34,7 +34,9 @@ func main() {
 	}
 
 	log.Printf("Запускаем конвертацию для платформы '%s'...", config["platform"])
-	
+    
+    log.Println("main: Вызываем tiddlywiki-converter.Convert с config:", config["platform"], config["url"])
+    
 	tiddlers, err := tiddlywiki_converter.Convert(config)
 	if err != nil {
 		log.Fatalf("Ошибка конвертации: %v", err)

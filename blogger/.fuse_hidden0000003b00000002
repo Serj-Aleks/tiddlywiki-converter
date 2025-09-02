@@ -47,22 +47,8 @@ func getBlogIDByURL(service *blogger.Service, blogURL string) (string, error) {
 
 // convertBlogContent выполняет основную работу по конвертации постов и комментариев.
 // Она принимает уже созданный сервис и ID блога.
-// Файл: tiddlywiki-converter/blogger/converter.go
-
-// convertBlogContent выполняет основную работу по конвертации постов и комментариев.
-// Она принимает уже созданный сервис и ID блога.
 func convertBlogContent(service *blogger.Service, blogID string) ([]*tiddlywiki.Tiddler, error) {
 	var allTiddlers []*tiddlywiki.Tiddler
-
-	// --- НАЧАЛО ИЗМЕНЕНИЙ (БЛОК 1) ---
-	log.Println("Шаг 0: Загрузка информации о блоге...")
-	blogInfo, err := service.Blogs.Get(blogID).Do()
-	if err != nil {
-		return nil, fmt.Errorf("не удалось получить информацию о блоге с ID '%s': %w", blogID, err)
-	}
-	blogURL := blogInfo.Url
-	log.Printf("URL блога для субтитула: %s", blogURL)
-	// --- КОНЕЦ ИЗМЕНЕНИЙ (БЛОК 1) ---
 
 	log.Println("Шаг 1: Загрузка всех постов...")
 	posts, err := fetchAllPosts(service, blogID)
@@ -77,22 +63,8 @@ func convertBlogContent(service *blogger.Service, blogID string) ([]*tiddlywiki.
 		cleanTitle := html.UnescapeString(post.Title)
 		cleanContent := post.Content // Контент поста берем "КАК ЕСТЬ"
 		authorName := html.UnescapeString(post.Author.DisplayName)
-		
-		// --- НАЧАЛО ИЗМЕНЕНИЙ (БЛОК 2) ---
-		// Скрипт для автоматического отображения комментариев
-		commentScript := `
-<br>
----
-<h3>Комментарии:</h3>
-<$list filter="[tag[comment]parent-post{!!post-slug}]" emptyMessage="Комментариев нет.">
-<div style="border-left: 3px solid #ccc; padding-left: 15px; margin-top: 15px; margin-bottom: 15px;">
-<$transclude tiddler=<<currentTiddler>> mode="block"/>
-</div>
-</$list>`
-		
 		cleanContent += fmt.Sprintf("\n\n<p>''Автор: %s''</p>", authorName)
-		cleanContent += commentScript // Добавляем скрипт в конец поста
-		
+
 		created, _ := time.Parse(time.RFC3339, post.Published)
 		tiddlyTime := created.UTC().Format(tiddlywiki.TiddlyTimeFormat)
 
@@ -100,9 +72,7 @@ func convertBlogContent(service *blogger.Service, blogID string) ([]*tiddlywiki.
 		postTiddler.Created = tiddlyTime
 		postTiddler.Modified = tiddlyTime
 		postTiddler.Fields["post-slug"] = post.Id
-		postTiddler.Fields["source-url"] = post.Url // Добавляем URL на оригинальный пост
 		allTiddlers = append(allTiddlers, postTiddler)
-		// --- КОНЕЦ ИЗМЕНЕНИЙ (БЛОК 2) ---
 		
 		// --- ОБРАБОТКА КОММЕНТАРИЕВ ---
 		log.Printf("Запрос комментариев для поста %d/%d: %s", i+1, len(posts), cleanTitle)
@@ -122,10 +92,7 @@ func convertBlogContent(service *blogger.Service, blogID string) ([]*tiddlywiki.
 			commentCounter++ 
 
 			decodedText := html.UnescapeString(comment.Content)
-			// --- ИЗМЕНЕНИЕ: Улучшенная очистка + ссылка на источник для комментариев ---
 			cleanCommentText := stripHTML(decodedText)
-			cleanCommentText += fmt.Sprintf("\n\n''Источник: [[%s]]''", cleanTitle)
-
 
 			commentAuthor := html.UnescapeString(comment.Author.DisplayName)
 			
@@ -147,13 +114,6 @@ func convertBlogContent(service *blogger.Service, blogID string) ([]*tiddlywiki.
 		
 		time.Sleep(1 * time.Second)
 	}
-
-	// --- НАЧАЛО ИЗМЕНЕНИЙ (БЛОК 3) ---
-	log.Println("Шаг 3: Добавление системных тиддлеров...")
-	siteTitleTiddler := tiddlywiki.NewTiddler("$:/SiteTitle", "Blogger", "")
-	siteSubtitleTiddler := tiddlywiki.NewTiddler("$:/SiteSubtitle", blogURL, "")
-	allTiddlers = append(allTiddlers, siteTitleTiddler, siteSubtitleTiddler)
-	// --- КОНЕЦ ИЗМЕНЕНИЙ (БЛОК 3) ---
 
 	return allTiddlers, nil
 }

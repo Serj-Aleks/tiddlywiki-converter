@@ -3,32 +3,17 @@ package hashnode
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/gomarkdown/markdown"
 	"github.com/shurcooL/graphql"
 	"tiddlywiki-converter/tiddlywiki"
-	"github.com/gomarkdown/markdown"
 )
 
-// --- ВОССТАНОВЛЕНА ПРАВИЛЬНАЯ СТРУКТУРА С EDGES -> NODE ---
-
-type ReplyGQL struct {
-	Author    struct{ Name graphql.String }
-	Content   struct{ Text graphql.String }
-	DateAdded graphql.String
-}
-
-type CommentGQL struct {
-	Author    struct{ Name graphql.String }
-	Content   struct{ Text graphql.String }
-	DateAdded graphql.String
-	Replies   struct {
-		Edges []struct{ Node ReplyGQL }
-	} `graphql:"replies(first: 50)"`
-}
-
+// ИСПРАВЛЕННАЯ ВЕРСИЯ
 type PublicationGQL struct {
 	Posts struct {
 		PageInfo struct {
@@ -52,21 +37,41 @@ type PublicationGQL struct {
 		}
 	} `graphql:"posts(first: $first, after: $after)"`
 }
-// ... (остальные структуры запросов остаются теми же) ...
+
+type ReplyGQL struct {
+	Author    struct{ Name graphql.String }
+	Content   struct{ Text graphql.String }
+	DateAdded graphql.String
+}
+
+type CommentGQL struct {
+	Author    struct{ Name graphql.String }
+	Content   struct{ Text graphql.String }
+	DateAdded graphql.String
+	Replies   struct {
+		Edges []struct{ Node ReplyGQL }
+	} `graphql:"replies(first: 50)"`
+}
+
+// Запрос для получения постов по хосту (основной рабочий запрос)
 type publicationByHostQuery struct {
 	Publication PublicationGQL `graphql:"publication(host: $host)"`
 }
-type publicationByUserQuery struct {
+
+// Запрос для получения хоста по имени пользователя (используется один раз)
+type userHostQuery struct {
 	User struct {
 		Publications struct {
 			Edges []struct {
-				Node PublicationGQL
+				Node struct {
+					Host graphql.String
+				}
 			}
 		} `graphql:"publications(first: 1)"`
 	} `graphql:"user(username: $username)"`
 }
 
-
+// processComments остается без изменений
 func processComments(commentEdges []struct{ Node CommentGQL }, postTitle, postSlug string, tiddlers *[]*tiddlywiki.Tiddler) {
 	for _, commentEdge := range commentEdges {
 		comment := commentEdge.Node
@@ -84,7 +89,6 @@ func processComments(commentEdges []struct{ Node CommentGQL }, postTitle, postSl
 		commentTiddler.Fields["parent-post"] = postSlug
 		*tiddlers = append(*tiddlers, commentTiddler)
 
-		// Обрабатываем ответы
 		for _, replyEdge := range comment.Replies.Edges {
 			reply := replyEdge.Node
 			replyAuthor := string(reply.Author.Name)
@@ -104,40 +108,55 @@ func processComments(commentEdges []struct{ Node CommentGQL }, postTitle, postSl
 	}
 }
 
-
+// --- ИЗМЕНЕНИЕ: Полностью переписанная функция ConvertFromAPI ---
 func ConvertFromAPI(username, host string) ([]*tiddlywiki.Tiddler, error) {
 	client := graphql.NewClient("https://gql.hashnode.com/", nil)
 	var allTiddlers []*tiddlywiki.Tiddler
 	
-	var publication PublicationGQL
+	var publicationHost string
+
+	// Шаг 1: Определяем хост блога.
+	if host != "" {
+		publicationHost = host
+		log.Printf("Используем предоставленный хост: %s", publicationHost)
+	} else if username != "" {
+		log.Printf("Хост не предоставлен, ищем публикацию для пользователя: %s", username)
+		var query userHostQuery
+		variables := map[string]interface{}{"username": graphql.String(username)}
+		err := client.Query(context.Background(), &query, variables)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка при поиске публикации пользователя '%s': %w", username, err)
+		}
+		if len(query.User.Publications.Edges) == 0 {
+			return nil, fmt.Errorf("у пользователя '%s' не найдено публикаций", username)
+		}
+		publicationHost = string(query.User.Publications.Edges[0].Node.Host)
+		log.Printf("Найдена публикация с хостом: %s", publicationHost)
+	} else {
+		// Эта проверка дублируется в converter.go, но так надежнее
+		return nil, fmt.Errorf("необходимо указать имя пользователя или хост")
+	}
+
+	// Шаг 2: Запускаем цикл пагинации, используя только хост.
 	hasNextPage := true
 	cursor := (*graphql.String)(nil)
 
 	for hasNextPage {
 		variables := map[string]interface{}{
+			"host":  graphql.String(publicationHost),
 			"first": graphql.Int(20),
 			"after": cursor,
 		}
-
-		if host != "" {
-			variables["host"] = graphql.String(host)
-			var query publicationByHostQuery
-			err := client.Query(context.Background(), &query, variables)
-			if err != nil { return nil, err }
-			publication = query.Publication
-		} else {
-			variables["username"] = graphql.String(username)
-			var query publicationByUserQuery
-			err := client.Query(context.Background(), &query, variables)
-			if err != nil { return nil, err }
-			if len(query.User.Publications.Edges) == 0 {
-				return nil, fmt.Errorf("у пользователя '%s' не найдено публикаций", username)
-			}
-			publication = query.User.Publications.Edges[0].Node
+		var query publicationByHostQuery
+		err := client.Query(context.Background(), &query, variables)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка при получении постов с хоста '%s': %w", publicationHost, err)
 		}
+		
+		publication := query.Publication
 
 		if len(publication.Posts.Edges) == 0 && len(allTiddlers) == 0 {
-			return nil, fmt.Errorf("не найдено постов")
+			return nil, fmt.Errorf("на хосте '%s' не найдено постов", publicationHost)
 		}
 
 		for _, edge := range publication.Posts.Edges {
@@ -159,6 +178,11 @@ func ConvertFromAPI(username, host string) ([]*tiddlywiki.Tiddler, error) {
 			postTiddler.Created = tiddlyTime
 			postTiddler.Modified = tiddlyTime
 			postTiddler.Fields["post-slug"] = postSlug
+			
+			// ДОБАВЛЕНО: Ссылка на источник
+			sourceURL := fmt.Sprintf("https://%s/%s", publicationHost, postSlug)
+			postTiddler.Fields["source-url"] = sourceURL
+			
 			allTiddlers = append(allTiddlers, postTiddler)
 
 			processComments(post.Comments.Edges, postTitle, postSlug, &allTiddlers)
@@ -166,11 +190,18 @@ func ConvertFromAPI(username, host string) ([]*tiddlywiki.Tiddler, error) {
 		
 		hasNextPage = bool(publication.Posts.PageInfo.HasNextPage)
 		cursor = &publication.Posts.PageInfo.EndCursor
+		log.Printf("Загружено %d постов, следующая страница: %v", len(publication.Posts.Edges), hasNextPage)
 	}
+
+	// ДОБАВЛЕНО: Создание системных тиддлеров для заголовка
+	siteTitleTiddler := tiddlywiki.NewTiddler("$:/SiteTitle", "Hashnode", "")
+	siteSubtitleTiddler := tiddlywiki.NewTiddler("$:/SiteSubtitle", publicationHost, "")
+	allTiddlers = append(allTiddlers, siteTitleTiddler, siteSubtitleTiddler)
 
 	return allTiddlers, nil
 }
 
+// SanitizeTag остается без изменений
 func SanitizeTag(tag string) string {
 	tag = strings.ReplaceAll(tag, " ", "-")
 	reg := regexp.MustCompile("[^a-zA-Z0-9-]+")

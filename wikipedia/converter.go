@@ -537,6 +537,13 @@ func ConvertFromURL(pageURL string) ([]*tiddlywiki.Tiddler, error) {
 		tiddlers = append(tiddlers, catTiddler)
 	}
 
+	// --- НАЧАЛО ИЗМЕНЕНИЙ ---
+	// Создаем и добавляем системные тиддлеры для заголовка и подзаголовка
+	siteTitleTiddler := tiddlywiki.NewTiddler("$:/SiteTitle", projectInfo.ProjectName, "")    
+	siteSubtitleTiddler := tiddlywiki.NewTiddler("$:/SiteSubtitle", pageTitle, "")
+	tiddlers = append(tiddlers, siteTitleTiddler, siteSubtitleTiddler)
+	// --- КОНЕЦ ИЗМЕНЕНИЙ ---    
+
 	return tiddlers, nil
 }
 
@@ -560,11 +567,22 @@ func getArticleTitleFromURL(pageURL string) (string, error) {
 
 func fetchArticleHTML(articleTitle, domain string) (string, error) {
 	apiURL := fmt.Sprintf("https://%s/w/api.php?action=parse&page=%s&prop=text&format=json&disabletoc=true", domain, url.QueryEscape(articleTitle))
-	resp, err := http.Get(apiURL)
+
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("ошибка при создании запроса к API: %w", err)
+	}
+
+	// Устанавливаем "вежливый" User-Agent
+	req.Header.Set("User-Agent", "TiddlyHub-GAIStudio-Converter/1.0 (https://github.com/Serj-Aleks/tiddlyhub-gaistudio)")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("ошибка при запросе к API: %w", err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("API вернул статус: %s", resp.Status)
 	}
@@ -586,11 +604,22 @@ func fetchArticleHTML(articleTitle, domain string) (string, error) {
 
 func fetchCategories(articleTitle, domain string) ([]string, error) {
 	apiURL := fmt.Sprintf("https://%s/w/api.php?action=query&prop=categories&titles=%s&format=json&cllimit=max&clshow=!hidden", domain, url.QueryEscape(articleTitle))
-	resp, err := http.Get(apiURL)
+	
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при создании запроса категорий: %w", err)
+	}
+
+	// Устанавливаем тот же "вежливый" User-Agent
+	req.Header.Set("User-Agent", "TiddlyHub-GAIStudio-Converter/1.0 (https://github.com/Serj-Aleks/tiddlyhub-gaistudio)")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка при запросе категорий: %w", err)
 	}
 	defer resp.Body.Close()
+	
 	var result struct {
 		Query struct {
 			Pages map[string]struct {
